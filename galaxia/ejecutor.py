@@ -2,14 +2,93 @@ from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import DatabaseError
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 
-def ejecutar_accion_ia(resultado_json):
+def validar_accion_ia(resultado_json):
     if not isinstance(resultado_json, dict):
-        return "Fracaso: el resultado de la IA debe ser un objeto JSON."
+        raise ValueError("El resultado de la IA debe ser un objeto JSON.")
+
+    modulo = resultado_json.get("modulo")
+    accion = resultado_json.get("accion")
+    datos = resultado_json.get("datos")
+    if modulo not in {"Auto", "Calendario", "Finanzas", "Comida"}:
+        raise ValueError("El módulo de la propuesta no es válido.")
+    if not isinstance(accion, str) or not accion.strip():
+        raise ValueError("La propuesta no contiene una acción válida.")
+    if not isinstance(datos, dict):
+        raise ValueError("Los datos de la propuesta deben ser un objeto JSON.")
+
+    propuesta = {
+        "modulo": modulo,
+        "accion": accion.strip(),
+        "datos": dict(datos),
+    }
+
+    if modulo == "Auto":
+        try:
+            monto = int(datos["monto"])
+            kilometraje = int(datos["kilometraje"])
+            litros = Decimal(str(datos["litros"]))
+        except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+            raise ValueError(
+                "Auto requiere monto, kilometraje y litros válidos."
+            ) from exc
+        if monto <= 0 or kilometraje < 0 or litros <= 0:
+            raise ValueError(
+                "Auto requiere monto y litros mayores que cero, y kilometraje "
+                "no negativo."
+            )
+        propuesta["datos"].update(
+            monto=monto,
+            kilometraje=kilometraje,
+            litros=str(litros),
+        )
+    elif modulo == "Calendario":
+        fecha_inicio = parse_datetime(str(datos.get("fecha_inicio", "")))
+        if fecha_inicio is None:
+            raise ValueError("Calendario requiere una fecha_inicio ISO 8601 válida.")
+        fecha_fin = parse_datetime(str(datos.get("fecha_fin", "")))
+        if fecha_fin is None:
+            fecha_fin = fecha_inicio + timedelta(hours=1)
+        if timezone.is_naive(fecha_inicio):
+            fecha_inicio = timezone.make_aware(fecha_inicio)
+        if timezone.is_naive(fecha_fin):
+            fecha_fin = timezone.make_aware(fecha_fin)
+        if fecha_fin <= fecha_inicio:
+            raise ValueError("La fecha_fin debe ser posterior a fecha_inicio.")
+        propuesta["datos"].update(
+            fecha_inicio=fecha_inicio.isoformat(),
+            fecha_fin=fecha_fin.isoformat(),
+        )
+    elif modulo == "Comida":
+        descripcion = datos.get("descripcion")
+        if not isinstance(descripcion, str) or not descripcion.strip():
+            raise ValueError("Comida requiere una descripción.")
+        tipo_comida = str(datos.get("tipo", "Almuerzo")).strip().capitalize()
+        tipos_validos = {"Desayuno", "Almuerzo", "Once", "Cena", "Snack"}
+        if tipo_comida not in tipos_validos:
+            tipo_comida = "Snack"
+        propuesta["datos"].update(
+            tipo=tipo_comida,
+            descripcion=descripcion.strip(),
+        )
+    else:
+        try:
+            monto = int(datos["monto"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Finanzas requiere un monto entero válido.") from exc
+        if monto <= 0:
+            raise ValueError("El monto financiero debe ser mayor que cero.")
+        propuesta["datos"]["monto"] = monto
+
+    return propuesta
+
+
+def ejecutar_accion_ia(resultado_json):
+    resultado_json = validar_accion_ia(resultado_json)
 
     modulo = resultado_json.get("modulo")
     accion = resultado_json.get("accion")
@@ -24,6 +103,7 @@ def ejecutar_accion_ia(resultado_json):
         match modulo:
             case "Auto":
                 from hefesto.models import CargaCombustible, Vehiculo
+                from pluto.models import Categoria, Transaccion
 
                 monto = datos.get("monto")
                 kilometraje = datos.get("kilometraje")
@@ -45,12 +125,35 @@ def ejecutar_accion_ia(resultado_json):
                 except (InvalidOperation, ValueError) as exc:
                     raise ValueError("litros debe ser un número válido.") from exc
 
-                carga = CargaCombustible.objects.create(
-                    vehiculo=vehiculo,
-                    litros=litros,
-                    kilometraje=int(kilometraje),
-                    costo_total=int(monto),
-                )
+                with transaction.atomic():
+                    carga = CargaCombustible.objects.create(
+                        vehiculo=vehiculo,
+                        litros=litros,
+                        kilometraje=int(kilometraje),
+                        costo_total=int(monto),
+                    )
+                    categoria, _ = Categoria.objects.get_or_create(
+                        nombre="Combustible",
+                        defaults={
+                            "tipo": Categoria.Tipo.GASTO_VARIABLE,
+                            "descripcion": (
+                                "Gastos de combustible del vehículo."
+                            ),
+                        },
+                    )
+                    transaccion = Transaccion.objects.create(
+                        monto=int(monto),
+                        tipo=Transaccion.Tipo.GASTO,
+                        categoria=categoria,
+                        descripcion=(
+                            f"Carga de combustible de {vehiculo} "
+                            f"({litros} L)"
+                        ),
+                        fecha=carga.fecha,
+                        modulo_origen=Transaccion.ModuloOrigen.HEFESTO,
+                    )
+                    carga.transaccion_finanzas = transaccion
+                    carga.save(update_fields=["transaccion_finanzas"])
                 return f"Éxito: carga de combustible creada (ID {carga.pk})."
 
             case "Calendario":
@@ -171,11 +274,25 @@ def ejecutar_accion_ia(resultado_json):
                     f"(ID {transaccion.pk})."
                 )
 
+            case "Comida":
+                from demeter.models import RegistroComida
+
+                registro = RegistroComida.objects.create(
+                    tipo=datos["tipo"],
+                    descripcion=datos["descripcion"],
+                    fecha=timezone.now(),
+                    gasto_asociado=False,
+                )
+                return (
+                    f"Éxito: registro de comida creado "
+                    f"(ID {registro.pk})."
+                )
+
             case _:
                 return f"Fracaso: módulo no soportado: {modulo!r}."
     except (TypeError, ValueError) as exc:
         return f"Fracaso: datos inválidos para {modulo}: {exc}"
     except ObjectDoesNotExist as exc:
         return f"Fracaso: no se encontró el registro requerido: {exc}"
-    except DatabaseError as exc:
-        return f"Fracaso al ejecutar la acción de {modulo}: {exc}"
+    except DatabaseError:
+        raise

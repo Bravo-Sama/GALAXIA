@@ -1,4 +1,4 @@
-from django.db import models, transaction
+from django.db import models
 from django.utils import timezone
 
 
@@ -44,32 +44,6 @@ class CargaCombustible(models.Model):
     def __str__(self):
         return f"{self.vehiculo.patente} - {self.litros} L - ${self.costo_total}"
 
-    def save(self, *args, **kwargs):
-        if self.transaccion_finanzas_id is not None or self.costo_total <= 0:
-            return super().save(*args, **kwargs)
-
-        from pluto.models import Categoria, Transaccion
-
-        with transaction.atomic():
-            super().save(*args, **kwargs)
-            categoria, _ = Categoria.objects.get_or_create(
-                nombre="Combustible",
-                defaults={
-                    "tipo": Categoria.Tipo.GASTO_VARIABLE,
-                    "descripcion": "Gastos de combustible del vehículo.",
-                },
-            )
-            self.transaccion_finanzas = Transaccion.objects.create(
-                monto=self.costo_total,
-                tipo=Transaccion.Tipo.GASTO,
-                categoria=categoria,
-                descripcion=f"Carga de combustible de {self.vehiculo} ({self.litros} L)",
-                fecha=self.fecha,
-                modulo_origen=Transaccion.ModuloOrigen.HEFESTO,
-            )
-            super().save(update_fields=["transaccion_finanzas"])
-
-
 class Mantenimiento(models.Model):
     vehiculo = models.ForeignKey(
         Vehiculo,
@@ -96,28 +70,3 @@ class Mantenimiento(models.Model):
 
     def __str__(self):
         return f"{self.vehiculo.patente} - {self.titulo}"
-
-    def save(self, *args, **kwargs):
-        if self.transaccion_finanzas_id is not None or self.costo <= 0:
-            return super().save(*args, **kwargs)
-
-        from pluto.models import Categoria, Transaccion
-
-        with transaction.atomic():
-            super().save(*args, **kwargs)
-            categoria, _ = Categoria.objects.get_or_create(
-                nombre="Mantenimiento del vehículo",
-                defaults={
-                    "tipo": Categoria.Tipo.GASTO_VARIABLE,
-                    "descripcion": "Gastos de mantenimiento del vehículo.",
-                },
-            )
-            self.transaccion_finanzas = Transaccion.objects.create(
-                monto=self.costo,
-                tipo=Transaccion.Tipo.GASTO,
-                categoria=categoria,
-                descripcion=f"{self.titulo} - {self.vehiculo}",
-                fecha=self.fecha,
-                modulo_origen=Transaccion.ModuloOrigen.HEFESTO,
-            )
-            super().save(update_fields=["transaccion_finanzas"])

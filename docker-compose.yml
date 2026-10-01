@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: galaxia_db
+      MYSQL_USER: ${MYSQL_USER:?Define MYSQL_USER in .env}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Define MYSQL_PASSWORD in .env}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Define MYSQL_ROOT_PASSWORD in .env}
     ports:
       - "3306:3306"

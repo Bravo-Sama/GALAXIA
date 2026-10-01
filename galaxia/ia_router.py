@@ -12,12 +12,14 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 def procesar_mensaje_ollama(texto_usuario):
     system_prompt = (
         "Clasifica el mensaje del usuario en exactamente una categoría: "
-        "Finanzas, Auto o Calendario. Responde únicamente con un objeto JSON "
+        "Finanzas, Auto, Calendario o Comida. Responde únicamente con un objeto JSON "
         'válido que contenga las llaves "modulo", "accion" y "datos". '
         "Regla de Dinero: Si el usuario menciona 'lucas', multiplica por 1000. "
         "Si no especifica unidad, asume Pesos Chilenos (CLP). "
         "Regla de Fechas: Para eventos de calendario, usa SIEMPRE el formato "
         "ISO 8601 (ej: 2026-10-02T20:00:00). "
+        "Regla de Comida: Extrae 'tipo' (Desayuno, Almuerzo, Once, Cena, "
+        "Snack) y una 'descripcion' detallada. "
         "No incluyas Markdown ni texto adicional."
     )
     payload = {
@@ -52,7 +54,7 @@ def procesar_mensaje_ollama(texto_usuario):
     # Sanitizamos el nombre del módulo (ej: "finanzas" -> "Finanzas")
     modulo_extraido = str(resultado.get("modulo", "")).capitalize()
     
-    if modulo_extraido not in {"Finanzas", "Auto", "Calendario"}:
+    if modulo_extraido not in {"Finanzas", "Auto", "Calendario", "Comida"}:
         raise ValueError(f"La respuesta contiene un módulo no válido: {modulo_extraido}")
     
     if not isinstance(resultado.get("accion"), str) or not resultado["accion"]:

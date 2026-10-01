@@ -53,7 +53,10 @@ Define la contraseña de MySQL en un archivo `.env` en la raíz:
 MYSQL_ROOT_PASSWORD=tu_clave_segura
 ```
 
-El archivo `.env` está excluido de Git y no debe subirse al repositorio.
+Usa [.env.example](./.env.example) como plantilla y define también una
+contraseña distinta para `MYSQL_PASSWORD`, además de `DJANGO_SECRET_KEY` y
+`GALAXIA_API_KEY`. El archivo `.env` está excluido de Git y no debe subirse al
+repositorio.
 
 ## Base de datos
 
@@ -73,6 +76,18 @@ Aplica las migraciones:
 ```powershell
 python manage.py migrate
 ```
+
+La API requiere el encabezado:
+
+```text
+X-API-Key: tu_api_key
+```
+
+El endpoint `POST /api/chat` solo genera una propuesta. La operación debe
+confirmarse mediante `POST /api/chat/propuestas/{id}/confirmar`.
+
+Las propuestas expiran después de 10 minutos y solo pueden confirmarse una
+vez. El endpoint de chat no modifica directamente la base de datos de negocio.
 
 Opcionalmente, crea un usuario administrador:
 
